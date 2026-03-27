@@ -4,7 +4,9 @@
 #include <gcrecomp/loader/binary.h>
 #include <gcrecomp/analysis/disasm.h>
 #include <gcrecomp/analysis/cfg.h>
+#include <gcrecomp/analysis/lifter.h>
 #include <queue>
+#include <set>
 
 namespace gcrecomp {
 
@@ -19,6 +21,7 @@ private:
     const Binary& m_binary;
     Disassembler m_disasm;
     ControlFlowGraph m_cfg;
+    Lifter m_lifter;
     std::set<u32> m_visited;
     std::queue<u32> m_workList;
 

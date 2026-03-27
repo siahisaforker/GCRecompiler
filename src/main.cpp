@@ -35,13 +35,16 @@ int main(int argc, char** argv) {
     Analyzer analyzer(dol);
     analyzer.analyze(dol.getEntryPoint());
 
-    LOG_INFO("Analysis Complete. Discovered %zu basic blocks and %zu functions.", 
-             analyzer.getCfg().getBlocks().size(), 
-             analyzer.getCfg().getFunctions().size());
-
     const auto& cfg = analyzer.getCfg();
-    LOG_INFO("  Basic Blocks: %zu", cfg.getBlocks().size());
-    LOG_INFO("  Functions:    %zu", cfg.getFunctions().size());
+    size_t totalIR = 0;
+    for (const auto& [addr, block] : cfg.getBlocks()) {
+        totalIR += block.irInstructions.size();
+    }
+
+    LOG_INFO("Analysis Complete.");
+    LOG_INFO("  Basic Blocks:    %zu", cfg.getBlocks().size());
+    LOG_INFO("  Functions:       %zu", cfg.getFunctions().size());
+    LOG_INFO("  IR Instructions: %zu", totalIR);
 
     std::string dotPath = "cfg.dot";
     cfg.exportDot(dotPath);

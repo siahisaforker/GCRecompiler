@@ -10,3 +10,4 @@ CMakeFiles/
 # Just in case
 .env/
 .vscode/
+*cfg.dot

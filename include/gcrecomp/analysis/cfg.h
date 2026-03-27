@@ -1,6 +1,7 @@
 #pragma once
 
 #include <gcrecomp/types.h>
+#include <gcrecomp/analysis/ir.h>
 #include <gcrecomp/analysis/instruction.h>
 #include <vector>
 #include <map>
@@ -21,6 +22,7 @@ struct BasicBlock {
     u32 startAddr;
     u32 endAddr;
     std::vector<Instruction> instructions;
+    std::vector<IRInstruction> irInstructions;
     std::set<u32> successors;
     std::set<u32> predecessors;
     BlockType type = BlockType::Normal;
