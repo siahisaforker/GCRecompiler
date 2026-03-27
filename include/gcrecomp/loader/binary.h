@@ -31,39 +31,42 @@ public:
         return false;
     }
 
-    u8 read8(u32 addr) const {
+    bool read8(u32 addr, u8& out) const {
         const auto* region = findRegion(addr);
         if (!region || !region->contains(addr)) {
             LOG_ERROR("Invalid read8 at 0x%08X", addr);
-            return 0;
+            return false;
         }
-        return region->data[addr - region->start];
+        out = region->data[addr - region->start];
+        return true;
     }
 
-    u16 read16(u32 addr) const {
+    bool read16(u32 addr, u16& out) const {
         if (addr % 2 != 0) {
             LOG_ERROR("Unaligned read16 at 0x%08X", addr);
-            return 0;
+            return false;
         }
         const auto* region = findRegion(addr);
         if (!region || !region->contains(addr) || !region->contains(addr + 1)) {
             LOG_ERROR("Invalid or cross-region read16 at 0x%08X", addr);
-            return 0;
+            return false;
         }
-        return read_be16(&region->data[addr - region->start]);
+        out = read_be16(&region->data[addr - region->start]);
+        return true;
     }
 
-    u32 read32(u32 addr) const {
+    bool read32(u32 addr, u32& out) const {
         if (addr % 4 != 0) {
             LOG_ERROR("Unaligned read32 at 0x%08X", addr);
-            return 0;
+            return false;
         }
         const auto* region = findRegion(addr);
         if (!region || !region->contains(addr) || !region->contains(addr + 3)) {
             LOG_ERROR("Invalid or cross-region read32 at 0x%08X", addr);
-            return 0;
+            return false;
         }
-        return read_be32(&region->data[addr - region->start]);
+        out = read_be32(&region->data[addr - region->start]);
+        return true;
     }
 
 protected:

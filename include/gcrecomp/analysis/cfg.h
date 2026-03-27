@@ -5,6 +5,7 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <string>
 #include <memory>
 
 namespace gcrecomp {
@@ -26,14 +27,27 @@ struct BasicBlock {
     bool isAnalyzed = false;
 };
 
+struct Function {
+    u32 startAddr;
+    std::string name;
+    std::set<u32> blocks; // Addresses of basic blocks in this function
+};
+
 class ControlFlowGraph {
 public:
     void addBlock(const BasicBlock& block);
     BasicBlock* getBlock(u32 addr);
     const std::map<u32, BasicBlock>& getBlocks() const { return m_blocks; }
 
+    void addFunction(const Function& func);
+    Function* getFunction(u32 addr);
+    const std::map<u32, Function>& getFunctions() const { return m_functions; }
+
+    void exportDot(const std::string& path) const;
+
 private:
     std::map<u32, BasicBlock> m_blocks;
+    std::map<u32, Function> m_functions;
 };
 
 } // namespace gcrecomp

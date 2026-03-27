@@ -35,17 +35,17 @@ int main(int argc, char** argv) {
     Analyzer analyzer(dol);
     analyzer.analyze(dol.getEntryPoint());
 
-    const auto& cfg = analyzer.getCfg();
-    LOG_INFO("Analysis Complete. Found %zu basic blocks.", cfg.getBlocks().size());
+    LOG_INFO("Analysis Complete. Discovered %zu basic blocks and %zu functions.", 
+             analyzer.getCfg().getBlocks().size(), 
+             analyzer.getCfg().getFunctions().size());
 
-    std::cout << "\nFirst 10 Basic Blocks:" << std::endl;
-    int count = 0;
-    for (const auto& [addr, block] : cfg.getBlocks()) {
-        std::cout << "Block 0x" << std::hex << std::setw(8) << std::setfill('0') << addr 
-                  << " - 0x" << std::hex << std::setw(8) << std::setfill('0') << block.endAddr
-                  << " (" << std::dec << block.instructions.size() << " instructions)" << std::endl;
-        if (++count >= 10) break;
-    }
+    const auto& cfg = analyzer.getCfg();
+    LOG_INFO("  Basic Blocks: %zu", cfg.getBlocks().size());
+    LOG_INFO("  Functions:    %zu", cfg.getFunctions().size());
+
+    std::string dotPath = "cfg.dot";
+    cfg.exportDot(dotPath);
+    LOG_INFO("CFG exported to %s", dotPath.c_str());
 
     return 0;
 }

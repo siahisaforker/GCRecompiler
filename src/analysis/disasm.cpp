@@ -1,84 +1,81 @@
 #include <gcrecomp/analysis/disasm.h>
 #include <gcrecomp/log.h>
-#include <capstone/ppc.h>
+#include <iomanip>
+#include <sstream>
 
 namespace gcrecomp {
 
-Disassembler::Disassembler() {
-    if (cs_open(CS_ARCH_PPC, static_cast<cs_mode>(CS_MODE_32 | CS_MODE_BIG_ENDIAN), &m_handle) != CS_ERR_OK) {
-        LOG_ERROR("Failed to initialize Capstone");
-    } else {
-        cs_option(m_handle, CS_OPT_DETAIL, CS_OPT_ON);
-        m_valid = true;
+bool Disassembler::disassemble(const Binary& binary, u32 addr, Instruction& out) {
+    if (!binary.read32(addr, out.raw)) {
+        return false;
     }
-}
 
-Disassembler::~Disassembler() {
-    if (m_valid) {
-        cs_close(&m_handle);
-    }
-}
+    out.address = addr;
+    out.mnemonic = "unknown";
+    out.operands = "";
+    out.isBranch = false;
+    out.branchTarget = 0;
+    out.type = InstructionType::Unknown;
 
-bool Disassembler::disassemble(const Binary& binary, u32 addr, Instruction& outInstr) {
-    if (!m_valid) return false;
+    u32 op = out.raw >> 26;
+    
+    // Branch (b, bl, ba, bla)
+    if (op == 18) {
+        out.isBranch = true;
+        u32 li = (out.raw >> 2) & 0xFFFFFF;
+        if (li & 0x800000) li |= 0xFF000000; // Sign extend
+        bool aa = (out.raw >> 1) & 1;
+        bool lk = out.raw & 1;
 
-    if (!binary.isValidAddress(addr)) return false;
-
-    u32 raw = binary.read32(addr);
-    u8 bytes[4];
-    bytes[0] = static_cast<u8>(raw >> 24);
-    bytes[1] = static_cast<u8>(raw >> 16);
-    bytes[2] = static_cast<u8>(raw >> 8);
-    bytes[3] = static_cast<u8>(raw);
-
-    cs_insn* insn;
-    size_t count = cs_disasm(m_handle, bytes, 4, addr, 1, &insn);
-
-    if (count > 0) {
-        outInstr.address = addr;
-        outInstr.raw = raw;
-        outInstr.mnemonic = insn[0].mnemonic;
-        outInstr.operands = insn[0].op_str;
-        outInstr.type = InstructionType::Compute;
-
-        // Analyze instruction for control flow
-        cs_ppc* ppc = &insn[0].detail->ppc;
+        out.branchTarget = aa ? (li << 2) : (addr + (li << 2));
+        out.mnemonic = lk ? "bl" : "b";
+        out.type = lk ? InstructionType::Call : InstructionType::Branch;
         
-        // Simple branch detection
-        if (insn[0].id == PPC_INS_B || insn[0].id == PPC_INS_BA || 
-            insn[0].id == PPC_INS_BL || insn[0].id == PPC_INS_BLA ||
-            insn[0].id == PPC_INS_BC || insn[0].id == PPC_INS_BCA ||
-            insn[0].id == PPC_INS_BCL || insn[0].id == PPC_INS_BCLA) {
-            
-            outInstr.isBranch = true;
-            outInstr.type = InstructionType::Branch;
-
-            if (insn[0].id == PPC_INS_BL || insn[0].id == PPC_INS_BLA ||
-                insn[0].id == PPC_INS_BCL || insn[0].id == PPC_INS_BCLA) {
-                outInstr.isLink = true;
-                outInstr.type = InstructionType::Call;
-            }
-
-            // Find branch target
-            for (int i = 0; i < ppc->op_count; i++) {
-                if (ppc->operands[i].type == PPC_OP_IMM) {
-                    outInstr.branchTarget = static_cast<u32>(ppc->operands[i].imm);
-                    break;
-                }
-            }
-        } else if (insn[0].id == PPC_INS_BLR) {
-            outInstr.isBranch = true;
-            outInstr.type = InstructionType::Return;
-        } else if (insn[0].id == PPC_INS_BCTR || insn[0].id == PPC_INS_BCTRL) {
-            outInstr.isBranch = true;
-            outInstr.type = InstructionType::Call; // Indirect call
-        }
-
-        cs_free(insn, count);
+        std::stringstream ss;
+        ss << "0x" << std::hex << out.branchTarget;
+        out.operands = ss.str();
         return true;
     }
 
-    return false;
+    // Branch Conditional (bc, bcl, bca, bcla)
+    if (op == 16) {
+        out.isBranch = true;
+        u32 bd = (out.raw >> 2) & 0x3FFF;
+        if (bd & 0x2000) bd |= 0xFFFFC000; // Sign extend
+        bool aa = (out.raw >> 1) & 1;
+        bool lk = out.raw & 1;
+        
+        out.branchTarget = aa ? (bd << 2) : (addr + (bd << 2));
+        out.mnemonic = lk ? "bcl" : "bc";
+        out.type = lk ? InstructionType::Call : InstructionType::Branch;
+        
+        std::stringstream ss;
+        ss << "0x" << std::hex << out.branchTarget;
+        out.operands = ss.str();
+        return true;
+    }
+
+    // Branch to LR / CTR
+    if (op == 19) {
+        u32 xop = (out.raw >> 1) & 0x3FF;
+        bool lk = out.raw & 1;
+        
+        if (xop == 16) { // bclr
+            out.isBranch = true;
+            out.mnemonic = lk ? "bclrl" : "bclr";
+            out.type = InstructionType::Return; // Simplification: bclr is often blr
+            return true;
+        }
+        if (xop == 528) { // bcctr
+            out.isBranch = true;
+            out.mnemonic = lk ? "bcctrl" : "bcctr";
+            out.type = lk ? InstructionType::Call : InstructionType::Branch;
+            return true;
+        }
+    }
+
+    // Not a branch we care about for CFG (for now)
+    return true;
 }
 
 } // namespace gcrecomp

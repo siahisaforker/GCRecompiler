@@ -1,5 +1,7 @@
 #include <gcrecomp/analysis/analyzer.h>
 #include <gcrecomp/log.h>
+#include <string>
+#include <set>
 
 namespace gcrecomp {
 
@@ -47,9 +49,17 @@ void Analyzer::analyzeBlock(u32 startAddr) {
                 block.successors.insert(next);
                 m_workList.push(next);
                 
-                // Also add call target if known
+                // Call target is a possible function start
                 if (instr.branchTarget != 0) {
                     m_workList.push(instr.branchTarget);
+                    
+                    // Register the function
+                    if (m_cfg.getFunction(instr.branchTarget) == nullptr) {
+                        Function func;
+                        func.startAddr = instr.branchTarget;
+                        func.name = "sub_" + std::to_string(instr.branchTarget);
+                        m_cfg.addFunction(func);
+                    }
                 }
             } else if (instr.type == InstructionType::Branch) {
                 if (instr.branchTarget != 0) {
@@ -59,7 +69,6 @@ void Analyzer::analyzeBlock(u32 startAddr) {
                 
                 // If conditional, also add fallthrough
                 if (instr.mnemonic.find('b') == 0 && instr.mnemonic.length() > 1 && instr.mnemonic[1] != ' ') {
-                     // Very simple heuristic for conditional branch
                      u32 next = currentAddr + 4;
                      block.successors.insert(next);
                      m_workList.push(next);
@@ -70,7 +79,6 @@ void Analyzer::analyzeBlock(u32 startAddr) {
 
         currentAddr += 4;
         
-        // Check if we hit another block's start
         if (m_visited.count(currentAddr) && !block.instructions.empty()) {
             block.endAddr = currentAddr - 4;
             block.successors.insert(currentAddr);
