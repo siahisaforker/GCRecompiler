@@ -1,0 +1,9 @@
+# Don't include game files
+*.iso
+*.dol
+*.gcm
+*.bin
+iso/
+# Don't include build files
+build/
+CMakeFiles/
