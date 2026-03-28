@@ -42,6 +42,9 @@ add_executable(gcrecomp
     src/analysis/disasm.cpp
     src/analysis/cfg.cpp
     src/analysis/analyzer.cpp
+    src/analysis/lifter.cpp
+    src/analysis/optimizer.cpp
+    src/codegen/emitter.cpp
 )
 
 target_include_directories(gcrecomp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

@@ -20,3 +20,6 @@ analysis_log.txt
 
 # Executable
 gcrecomp.exe
+
+# Output
+output/

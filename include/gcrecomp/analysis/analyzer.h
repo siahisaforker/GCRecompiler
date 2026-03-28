@@ -8,6 +8,8 @@
 #include <gcrecomp/analysis/optimizer.h>
 #include <queue>
 #include <set>
+#include <string>
+#include <vector>
 
 namespace gcrecomp {
 
@@ -16,6 +18,7 @@ public:
     Analyzer(const Binary& binary);
     
     void analyze(u32 entryPoint);
+    void emitAllFunctions(const std::string& outputDir);
     const ControlFlowGraph& getCfg() const { return m_cfg; }
 
 private:
@@ -24,10 +27,12 @@ private:
     ControlFlowGraph m_cfg;
     Lifter m_lifter;
     Optimizer m_optimizer;
-    std::set<u32> m_visited;
-    std::queue<u32> m_workList;
+    std::set<u32> m_visitedBlocks;
+    std::set<u32> m_discoveredFunctions;
+    std::set<u32> m_analyzedFunctions;
 
-    void analyzeBlock(u32 startAddr);
+    void analyzeFunction(u32 entryAddr);
+    void analyzeBlock(u32 startAddr, Function& currentFunc, const std::set<u32>& seeds);
 };
 
 } // namespace gcrecomp

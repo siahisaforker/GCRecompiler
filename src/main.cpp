@@ -50,5 +50,9 @@ int main(int argc, char** argv) {
     cfg.exportDot(dotPath);
     LOG_INFO("CFG exported to %s", dotPath.c_str());
 
+    LOG_INFO("Emitting C code to 'output'...");
+    analyzer.emitAllFunctions("output");
+    LOG_INFO("Code generation complete.");
+
     return 0;
 }

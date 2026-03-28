@@ -10,21 +10,31 @@ namespace gcrecomp {
 enum class IROp {
     None,
     // Arithmetic
-    Add, Sub, Mul, Div,
-    And, Or, Xor, Nor, Shl, Shr, Sar,
+    And, Or, Xor, Nor, Andc, Orc, Nand, Shl, Shr, Sar,
     Rol, Mask, // For rlwinm etc.
+    Rlwimi,    // For rlwimi
+    Add, Sub, Mul, Div, Addic,
+    // Bit Manipulation
+    Extsb, Extsh, Cntlzw,
     // Memory
-    Load8, Load16, Load32, LoadFloat,
-    Store8, Store16, Store32, StoreFloat,
+    Load8, Load8u, Load16, Load16u, Load16a, Load32, Load32u, LoadFloat, LoadDouble,
+    Store8, Store8u, Store16, Store16u, Store32, Store32u, StoreFloat, StoreDouble,
+    Lmw, Stmw,
     // Control Flow
-    Branch, BranchCond, Call, Return,
+    Branch, BranchCond, BranchIndirect, Call, CallIndirect, Return,
     // Comparison
     Cmp, Cmpl,
     // Floating Point
-    FAdd, FSub, FMul, FDiv,
-    // Special
+    FAdd, FSub, FMul, FDiv, FMadd, FMsub, FSel, Fctiw, Frsp,
+    // System / Special
     SetReg, GetReg, // Access physical registers
     SetImm,         // Load immediate to virtual reg
+    Mfspr, Mtspr,
+    Mfcr, Mtcrf,
+    Mfmsr, Mtmsr,
+    Sync, Isync,
+    Trap, Syscall,
+    ReservationLoad, ReservationStore,
 };
 
 enum class IROperandType {

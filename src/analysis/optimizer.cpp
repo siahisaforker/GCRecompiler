@@ -15,7 +15,9 @@ void Optimizer::constantPropagation(IRBlock &block) {
     bool instructionSimplified = false;
 
     // Fold operands if they are known constants
-    for (auto &op : instr.operands) {
+    // skip operand 0 which is usually the destination
+    for (size_t i = 1; i < instr.operands.size(); ++i) {
+      auto& op = instr.operands[i];
       if (op.type == IROperandType::Register) {
         auto it = regValues.find(op.value);
         if (it != regValues.end()) {
