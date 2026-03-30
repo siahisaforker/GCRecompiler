@@ -245,6 +245,8 @@ std::string Emitter::emitInstruction(const IRInstruction& instr,
         case IROp::FDiv:  return destFpr(0) + " = " + fpr(1) + " / " + fpr(2) + ";";
         case IROp::FMadd: return destFpr(0) + " = (" + fpr(1) + " * " + fpr(2) + ") + " + fpr(3) + ";";
         case IROp::FMsub: return destFpr(0) + " = (" + fpr(1) + " * " + fpr(2) + ") - " + fpr(3) + ";";
+        case IROp::FCmpo: return "set_fp_cr_field(ctx, " + operandToC(instr.operands[0]) + ", " + fpr(1) + ", " + fpr(2) + ", 1);";
+        case IROp::FCmpu: return "set_fp_cr_field(ctx, " + operandToC(instr.operands[0]) + ", " + fpr(1) + ", " + fpr(2) + ", 0);";
         case IROp::FSel:  return destFpr(0) + " = FSEL(" + fpr(1) + ", " + fpr(2) + ", " + fpr(3) + ");";
         case IROp::Fctiw: return destFpr(0) + " = FCTIW(" + fpr(1) + ");";
         case IROp::Frsp:  return destFpr(0) + " = FRSP(" + fpr(1) + ");";

@@ -98,6 +98,10 @@ u32 encodeX(u32 rsOrRt, u32 ra, u32 rb, u32 xop) {
     return (31u << 26) | (rsOrRt << 21) | (ra << 16) | (rb << 11) | (xop << 1);
 }
 
+u32 encodeFcmp(u32 crField, u32 fra, u32 frb, bool ordered) {
+    return (63u << 26) | (crField << 23) | (fra << 16) | (frb << 11) | ((ordered ? 32u : 0u) << 1);
+}
+
 u32 encodeXfx(u32 xop, u32 rt, u32 spr) {
     const u32 sprLo = spr & 0x1F;
     const u32 sprHi = (spr >> 5) & 0x1F;
@@ -288,6 +292,38 @@ bool testLifterDivw() {
            ir.operands[2].value == 5;
 }
 
+bool testLifterFloatingCompare() {
+    Instruction unordered {};
+    unordered.address = 0x80000020;
+    unordered.raw = encodeFcmp(2, 6, 7, false);
+
+    IRInstruction unorderedIr = liftSingle(unordered);
+    if (unorderedIr.op != IROp::FCmpu ||
+        unorderedIr.operands.size() != 3 ||
+        unorderedIr.operands[0].type != IROperandType::Immediate ||
+        unorderedIr.operands[0].value != 2 ||
+        unorderedIr.operands[1].regClass != IRRegisterClass::FPR ||
+        unorderedIr.operands[1].value != 6 ||
+        unorderedIr.operands[2].regClass != IRRegisterClass::FPR ||
+        unorderedIr.operands[2].value != 7) {
+        return false;
+    }
+
+    Instruction ordered {};
+    ordered.address = 0x80000024;
+    ordered.raw = encodeFcmp(5, 8, 9, true);
+
+    IRInstruction orderedIr = liftSingle(ordered);
+    return orderedIr.op == IROp::FCmpo &&
+           orderedIr.operands.size() == 3 &&
+           orderedIr.operands[0].type == IROperandType::Immediate &&
+           orderedIr.operands[0].value == 5 &&
+           orderedIr.operands[1].regClass == IRRegisterClass::FPR &&
+           orderedIr.operands[1].value == 8 &&
+           orderedIr.operands[2].regClass == IRRegisterClass::FPR &&
+           orderedIr.operands[2].value == 9;
+}
+
 bool testEmitterUsesNewHelpers() {
     ControlFlowGraph cfg;
     Function function;
@@ -301,6 +337,8 @@ bool testEmitterUsesNewHelpers() {
     block.irInstructions.push_back({ IROp::DivU, { IROperand::Reg(3), IROperand::Reg(4), IROperand::Reg(5) } });
     block.irInstructions.push_back({ IROp::DivS, { IROperand::Reg(6), IROperand::Reg(7), IROperand::Reg(8) } });
     block.irInstructions.push_back({ IROp::Mask, { IROperand::Reg(3), IROperand::Reg(3), IROperand::Imm(5), IROperand::Imm(10) } });
+    block.irInstructions.push_back({ IROp::FCmpo, { IROperand::Imm(2), IROperand::FReg(3), IROperand::FReg(4) } });
+    block.irInstructions.push_back({ IROp::FCmpu, { IROperand::Imm(5), IROperand::FReg(6), IROperand::FReg(7) } });
     block.irInstructions.push_back({ IROp::Fctiw, { IROperand::FReg(1), IROperand::FReg(2) } });
     block.irInstructions.push_back({ IROp::CallIndirect, { IROperand::Special(IRSpecialRegister::CountRegister) } });
     block.irInstructions.push_back({ IROp::Rfi, {} });
@@ -311,6 +349,8 @@ bool testEmitterUsesNewHelpers() {
     return emitted.find("PPC_DIVWU(ctx, ctx->gpr[4], ctx->gpr[5]);") != std::string::npos &&
            emitted.find("PPC_DIVW(ctx, ctx->gpr[7], ctx->gpr[8]);") != std::string::npos &&
            emitted.find("MASK32(") != std::string::npos &&
+           emitted.find("set_fp_cr_field(ctx, 0x2, ctx->fpr[3], ctx->fpr[4], 1);") != std::string::npos &&
+           emitted.find("set_fp_cr_field(ctx, 0x5, ctx->fpr[6], ctx->fpr[7], 0);") != std::string::npos &&
            emitted.find("FCTIW(") != std::string::npos &&
            emitted.find("call_by_addr(ctx, ctx->ctr);") != std::string::npos &&
            emitted.find("ctx->msr = get_spr(ctx, 0x1b); call_by_addr(ctx, get_spr(ctx, 0x1a)); return;") != std::string::npos;
@@ -578,6 +618,33 @@ bool testRuntimeHelpers() {
         return false;
     }
 
+    ctx.cr = 0;
+    set_fp_cr_field(&ctx, 0, 1.0, 2.0, 1);
+    if ((ctx.cr & 0xF0000000u) != 0x80000000u) {
+        return false;
+    }
+
+    ctx.cr = 0;
+    set_fp_cr_field(&ctx, 1, 2.0, 1.0, 0);
+    if ((ctx.cr & 0x0F000000u) != 0x04000000u) {
+        return false;
+    }
+
+    ctx.cr = 0;
+    set_fp_cr_field(&ctx, 2, 2.0, 2.0, 1);
+    if ((ctx.cr & 0x00F00000u) != 0x00200000u) {
+        return false;
+    }
+
+    u64 nanBits = 0x7FF8000000000000ull;
+    f64 nanValue = 0.0;
+    memcpy(&nanValue, &nanBits, sizeof(nanValue));
+    ctx.cr = 0;
+    set_fp_cr_field(&ctx, 3, nanValue, 1.0, 1);
+    if ((ctx.cr & 0x000F0000u) != 0x00010000u) {
+        return false;
+    }
+
     const f64 converted = FCTIW(3.75);
     MEM_WRITE_DOUBLE(0x30, converted);
     return MEM_READ32(0x34) == 3;
@@ -718,6 +785,7 @@ int main() {
         { "lifter_record_cr0", testLifterRecordFormUpdatesCr0 },
         { "lifter_divwu", testLifterDivwu },
         { "lifter_divw", testLifterDivw },
+        { "lifter_fcmp", testLifterFloatingCompare },
         { "emitter_helpers", testEmitterUsesNewHelpers },
         { "emitter_resume_pc", testEmitterResumesAtSavedPc },
         { "emitter_lr_returns", testEmitterTreatsLrBranchesAsReturns },

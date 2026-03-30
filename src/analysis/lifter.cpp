@@ -503,9 +503,11 @@ void Lifter::liftInstruction(const Instruction& instr, std::vector<IRInstruction
             if ((xop & 0x1F) == 29) { out.push_back({ IROp::FMadd, { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(rb), IROperand::FReg(frc) } }); break; }
 
             switch (xop) {
+                case 0:  out.push_back({ IROp::FCmpu, { IROperand::Imm(decodeCrField(raw)), IROperand::FReg(ra), IROperand::FReg(rb) } }); break;
                 case 12: out.push_back({ IROp::Frsp, { IROperand::FReg(rd), IROperand::FReg(rb) } }); break;
                 case 15: out.push_back({ IROp::Fctiw, { IROperand::FReg(rd), IROperand::FReg(rb) } }); break;
                 case 23: out.push_back({ IROp::FSel, { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(rb), IROperand::FReg(frc) } }); break;
+                case 32: out.push_back({ IROp::FCmpo, { IROperand::Imm(decodeCrField(raw)), IROperand::FReg(ra), IROperand::FReg(rb) } }); break;
                 case 72: out.push_back({ IROp::SetReg, { IROperand::FReg(rd), IROperand::FReg(rb) } }); break; // fmr
                 default:
                     break;

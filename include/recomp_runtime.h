@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 
 typedef uint8_t  u8;
 typedef uint16_t u16;
@@ -355,6 +356,23 @@ static inline void set_cr_field(CPUContext* ctx, u32 field, u32 a, u32 b, int is
         } else {
             result = 2;
         }
+    }
+
+    const u32 shift = 28 - (field * 4);
+    ctx->cr = (ctx->cr & ~(0xFu << shift)) | (result << shift);
+}
+
+static inline void set_fp_cr_field(CPUContext* ctx, u32 field, f64 a, f64 b, int ordered) {
+    u32 result = 0;
+    if (isnan(a) || isnan(b)) {
+        result = 1;
+        (void)ordered;
+    } else if (a < b) {
+        result = 8;
+    } else if (a > b) {
+        result = 4;
+    } else {
+        result = 2;
     }
 
     const u32 shift = 28 - (field * 4);
