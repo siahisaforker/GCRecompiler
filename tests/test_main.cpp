@@ -102,6 +102,10 @@ u32 encodeFcmp(u32 crField, u32 fra, u32 frb, bool ordered) {
     return (63u << 26) | (crField << 23) | (fra << 16) | (frb << 11) | ((ordered ? 32u : 0u) << 1);
 }
 
+u32 encodeAForm(u32 op, u32 frt, u32 fra, u32 frb, u32 frc, u32 xo5) {
+    return (op << 26) | (frt << 21) | (fra << 16) | (frb << 11) | (frc << 6) | (xo5 << 1);
+}
+
 u32 encodeXfx(u32 xop, u32 rt, u32 spr) {
     const u32 sprLo = spr & 0x1F;
     const u32 sprHi = (spr >> 5) & 0x1F;
@@ -276,9 +280,41 @@ bool testLifterDivwu() {
            ir.operands[2].value == 5;
 }
 
-bool testLifterDivw() {
+bool testLifterMulhwu() {
+    Instruction instr {};
+    instr.address = 0x8000001A;
+    instr.raw = encodeX(3, 4, 5, 11);
+
+    IRInstruction ir = liftSingle(instr);
+    return ir.op == IROp::MulHighU &&
+           ir.operands.size() == 3 &&
+           ir.operands[0].type == IROperandType::Register &&
+           ir.operands[0].value == 3 &&
+           ir.operands[1].type == IROperandType::Register &&
+           ir.operands[1].value == 4 &&
+           ir.operands[2].type == IROperandType::Register &&
+           ir.operands[2].value == 5;
+}
+
+bool testLifterMulhw() {
     Instruction instr {};
     instr.address = 0x8000001C;
+    instr.raw = encodeX(3, 4, 5, 75);
+
+    IRInstruction ir = liftSingle(instr);
+    return ir.op == IROp::MulHighS &&
+           ir.operands.size() == 3 &&
+           ir.operands[0].type == IROperandType::Register &&
+           ir.operands[0].value == 3 &&
+           ir.operands[1].type == IROperandType::Register &&
+           ir.operands[1].value == 4 &&
+           ir.operands[2].type == IROperandType::Register &&
+           ir.operands[2].value == 5;
+}
+
+bool testLifterDivw() {
+    Instruction instr {};
+    instr.address = 0x8000001E;
     instr.raw = encodeX(3, 4, 5, 491);
 
     IRInstruction ir = liftSingle(instr);
@@ -324,6 +360,40 @@ bool testLifterFloatingCompare() {
            orderedIr.operands[2].value == 9;
 }
 
+bool testLifterFloatingAFormOperands() {
+    Instruction fmuls {};
+    fmuls.address = 0x80000028;
+    fmuls.raw = encodeAForm(59, 4, 4, 0, 1, 25);
+
+    IRInstruction fmulsIr = liftSingle(fmuls);
+    if (fmulsIr.op != IROp::FMul ||
+        fmulsIr.operands.size() != 3 ||
+        fmulsIr.operands[0].regClass != IRRegisterClass::FPR ||
+        fmulsIr.operands[0].value != 4 ||
+        fmulsIr.operands[1].regClass != IRRegisterClass::FPR ||
+        fmulsIr.operands[1].value != 4 ||
+        fmulsIr.operands[2].regClass != IRRegisterClass::FPR ||
+        fmulsIr.operands[2].value != 1) {
+        return false;
+    }
+
+    Instruction fmadd {};
+    fmadd.address = 0x8000002C;
+    fmadd.raw = encodeAForm(63, 7, 8, 9, 10, 29);
+
+    IRInstruction fmaddIr = liftSingle(fmadd);
+    return fmaddIr.op == IROp::FMadd &&
+           fmaddIr.operands.size() == 4 &&
+           fmaddIr.operands[0].regClass == IRRegisterClass::FPR &&
+           fmaddIr.operands[0].value == 7 &&
+           fmaddIr.operands[1].regClass == IRRegisterClass::FPR &&
+           fmaddIr.operands[1].value == 8 &&
+           fmaddIr.operands[2].regClass == IRRegisterClass::FPR &&
+           fmaddIr.operands[2].value == 10 &&
+           fmaddIr.operands[3].regClass == IRRegisterClass::FPR &&
+           fmaddIr.operands[3].value == 9;
+}
+
 bool testEmitterUsesNewHelpers() {
     ControlFlowGraph cfg;
     Function function;
@@ -336,6 +406,8 @@ bool testEmitterUsesNewHelpers() {
     block.startAddr = 0x80000000;
     block.irInstructions.push_back({ IROp::DivU, { IROperand::Reg(3), IROperand::Reg(4), IROperand::Reg(5) } });
     block.irInstructions.push_back({ IROp::DivS, { IROperand::Reg(6), IROperand::Reg(7), IROperand::Reg(8) } });
+    block.irInstructions.push_back({ IROp::MulHighU, { IROperand::Reg(9), IROperand::Reg(10), IROperand::Reg(11) } });
+    block.irInstructions.push_back({ IROp::MulHighS, { IROperand::Reg(12), IROperand::Reg(13), IROperand::Reg(14) } });
     block.irInstructions.push_back({ IROp::Mask, { IROperand::Reg(3), IROperand::Reg(3), IROperand::Imm(5), IROperand::Imm(10) } });
     block.irInstructions.push_back({ IROp::FCmpo, { IROperand::Imm(2), IROperand::FReg(3), IROperand::FReg(4) } });
     block.irInstructions.push_back({ IROp::FCmpu, { IROperand::Imm(5), IROperand::FReg(6), IROperand::FReg(7) } });
@@ -348,6 +420,8 @@ bool testEmitterUsesNewHelpers() {
     const std::string emitted = emitter.emitFunction(function, cfg);
     return emitted.find("PPC_DIVWU(ctx, ctx->gpr[4], ctx->gpr[5]);") != std::string::npos &&
            emitted.find("PPC_DIVW(ctx, ctx->gpr[7], ctx->gpr[8]);") != std::string::npos &&
+           emitted.find("PPC_MULHWU(ctx, ctx->gpr[10], ctx->gpr[11]);") != std::string::npos &&
+           emitted.find("PPC_MULHW(ctx, ctx->gpr[13], ctx->gpr[14]);") != std::string::npos &&
            emitted.find("MASK32(") != std::string::npos &&
            emitted.find("set_fp_cr_field(ctx, 0x2, ctx->fpr[3], ctx->fpr[4], 1);") != std::string::npos &&
            emitted.find("set_fp_cr_field(ctx, 0x5, ctx->fpr[6], ctx->fpr[7], 0);") != std::string::npos &&
@@ -439,6 +513,112 @@ bool testEmitterDoesNotInventLocalLrResumes() {
            emitted.find("return;") != std::string::npos;
 }
 
+bool testEmitterIgnoresMissingFunctionSeedBlocks() {
+    ControlFlowGraph cfg;
+    Function function;
+    function.startAddr = 0x80000000u;
+    function.name = "phantom_seed_fn";
+    function.blocks.insert(0x60u);
+    function.blocks.insert(0x80000000u);
+    cfg.addFunction(function);
+
+    BasicBlock block;
+    block.startAddr = 0x80000000u;
+    block.irInstructions.push_back({ IROp::Call, { IROperand::Addr(0x60u) } });
+    cfg.addBlock(block);
+
+    Emitter emitter;
+    const std::string emitted = emitter.emitFunction(function, cfg);
+    return emitted.find("case 0x00000060: goto label_0x60;") == std::string::npos &&
+           emitted.find("goto label_0x60;") == std::string::npos &&
+           emitted.find("call_by_addr(ctx, 0x00000060);") != std::string::npos;
+}
+
+bool testEmitterSetsLrForExternalCalls() {
+    ControlFlowGraph cfg;
+    Function function;
+    function.startAddr = 0x80000000u;
+    function.name = "external_call_fn";
+    function.blocks.insert(0x80000000u);
+    cfg.addFunction(function);
+
+    BasicBlock block;
+    block.startAddr = 0x80000000u;
+
+    IRInstruction directCall { IROp::Call, { IROperand::Addr(0x80000100u) } };
+    directCall.address = 0x80000020u;
+    block.irInstructions.push_back(directCall);
+
+    IRInstruction indirectCall { IROp::CallIndirect, { IROperand::Special(IRSpecialRegister::CountRegister) } };
+    indirectCall.address = 0x80000024u;
+    block.irInstructions.push_back(indirectCall);
+
+    cfg.addBlock(block);
+
+    Emitter emitter;
+    const std::string emitted = emitter.emitFunction(function, cfg);
+    return emitted.find("ctx->lr = 0x80000024; call_by_addr(ctx, 0x80000100);") != std::string::npos &&
+           emitted.find("ctx->lr = 0x80000028; call_by_addr(ctx, ctx->ctr);") != std::string::npos;
+}
+
+bool testEmitterPreservesLrIndirectCallTarget() {
+    ControlFlowGraph cfg;
+    Function function;
+    function.startAddr = 0x80000000u;
+    function.name = "lr_indirect_call_fn";
+    function.blocks.insert(0x80000000u);
+    cfg.addFunction(function);
+
+    BasicBlock block;
+    block.startAddr = 0x80000000u;
+
+    IRInstruction indirectCall { IROp::CallIndirect, { IROperand::Special(IRSpecialRegister::LinkRegister) } };
+    indirectCall.address = 0x80000020u;
+    block.irInstructions.push_back(indirectCall);
+
+    cfg.addBlock(block);
+
+    Emitter emitter;
+    const std::string emitted = emitter.emitFunction(function, cfg);
+    return emitted.find("const uint32_t call_target = ctx->lr; ctx->lr = 0x80000024; call_by_addr(ctx, call_target);") != std::string::npos &&
+           emitted.find("ctx->lr = 0x80000024; call_by_addr(ctx, ctx->lr);") == std::string::npos;
+}
+
+bool testEmitterLogsUnexpectedLocalResumeTargets() {
+    ControlFlowGraph cfg;
+    Function function;
+    function.startAddr = 0x80000000u;
+    function.name = "resume_trace_fn";
+    function.blocks.insert(0x80000000u);
+    function.blocks.insert(0x80000004u);
+    function.blocks.insert(0x80000010u);
+    cfg.addFunction(function);
+
+    BasicBlock entryBlock;
+    entryBlock.startAddr = 0x80000000u;
+
+    IRInstruction call { IROp::Call, { IROperand::Addr(0x80000010u) } };
+    call.address = 0x80000000u;
+    entryBlock.irInstructions.push_back(call);
+    cfg.addBlock(entryBlock);
+
+    BasicBlock resumeBlock;
+    resumeBlock.startAddr = 0x80000004u;
+    resumeBlock.irInstructions.push_back({ IROp::Return, {} });
+    cfg.addBlock(resumeBlock);
+
+    BasicBlock calleeBlock;
+    calleeBlock.startAddr = 0x80000010u;
+    calleeBlock.irInstructions.push_back({ IROp::Return, {} });
+    cfg.addBlock(calleeBlock);
+
+    Emitter emitter;
+    const std::string emitted = emitter.emitFunction(function, cfg);
+    return emitted.find("case 0x80000004: goto label_0x80000004;") != std::string::npos &&
+           emitted.find("default: return;") != std::string::npos &&
+           emitted.find("[RUNTIME] Unhandled local resume target") == std::string::npos;
+}
+
 bool testAnalyzerEmitsLocalJumpTablesAsSwitches() {
     TestBinary binary;
     binary.setTextWords(0x80000000u, {
@@ -477,6 +657,65 @@ bool testAnalyzerEmitsLocalJumpTablesAsSwitches() {
            emitted.find("goto label_0x80000024;") != std::string::npos &&
            emitted.find("label_0x80000024:") != std::string::npos &&
            emitted.find("label_0x80000034:") != std::string::npos;
+}
+
+bool testLifterPreservesClobberedLocalJumpTableIndex() {
+    TestBinary binary;
+    binary.setTextWords(0x80000000u, {
+        0x9421FFF0u,                                  // stwu r1, -16(r1)
+        encodeCmpli(0, 0, 2),                         // cmplwi r0, 2
+        encodeBcRelative(0x80000008u, 12, 1, 0x80000030u),
+        encodeAddis(4, 0, static_cast<s16>(0x8000)), // lis r4, 0x8000
+        encodeAddi(4, 4, 0x100),                      // addi r4, r4, 0x100
+        encodeRlwinm(0, 0, 2, 0, 29),                // rlwinm r0, r0, 2, 0, 29
+        encodeX(0, 4, 0, 23),                        // lwzx r0, r4, r0
+        encodeMtspr(0, 9),                           // mtctr r0
+        0x4E800420u,                                 // bctr
+        encodeAddi(31, 0, 0),                        // li r31, 0
+        encodeBForm(0x0C, false, false),             // b 0x80000034
+        encodeAddi(31, 0, 1),                        // li r31, 1
+        0x4E800020u,                                 // blr (default / case 2)
+        0x4E800020u,                                 // blr (join)
+    });
+    binary.addDataWords(0x80000100u, {
+        0x80000024u,
+        0x8000002Cu,
+        0x80000030u,
+    });
+
+    Analyzer analyzer(binary);
+    analyzer.analyze(binary.getEntryPoint());
+
+    const BasicBlock* jumpBlock = nullptr;
+    for (const auto& [addr, block] : analyzer.getCfg().getBlocks()) {
+        if (block.localJumpTable) {
+            jumpBlock = &block;
+            break;
+        }
+    }
+    if (jumpBlock == nullptr || !jumpBlock->localJumpTable) {
+        return false;
+    }
+
+    Lifter lifter;
+    IRBlock ir = lifter.liftBlock(*jumpBlock);
+    if (ir.instructions.empty() || ir.instructions.back().op != IROp::BranchTable) {
+        return false;
+    }
+
+    for (const auto& instr : ir.instructions) {
+        if (instr.op == IROp::BranchIndirect || instr.op == IROp::Mtspr) {
+            return false;
+        }
+        if (instr.op == IROp::Load32 &&
+            !instr.operands.empty() &&
+            instr.operands[0].type == IROperandType::Register &&
+            instr.operands[0].value == 0) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 bool testOptimizerKeepsStoreSourcesAndFprsSeparate() {
@@ -603,6 +842,12 @@ bool testRuntimeHelpers() {
     if (PPC_DIVWU(&ctx, 12u, 0u) != 0u) {
         return false;
     }
+    if (PPC_MULHWU(&ctx, 0xFFFFFFFFu, 2u) != 1u) {
+        return false;
+    }
+    if (PPC_MULHW(&ctx, 0x80000000u, 2u) != 0xFFFFFFFFu) {
+        return false;
+    }
     if ((s32)PPC_DIVW(&ctx, (u32)-12, (u32)3) != -4) {
         return false;
     }
@@ -688,8 +933,9 @@ bool testAnalyzerRegistersTextReferencedEntryStubs() {
         0x4E800020u,                                   // blr
         0x4E800020u,                                   // blr: text-referenced callback stub
         0x60000000u,                                   // nop padding
-        encodeAddis(3, 0, static_cast<s16>(0x8000)),  // lis r3, 0x8000
-        encodeAddi(3, 3, 0x0004),                     // addi r3, r3, 4
+        encodeAddis(4, 0, static_cast<s16>(0x8000)),  // lis r4, 0x8000
+        encodeAddi(3, 1, 0x0008),                     // unrelated addi between hi/lo materialization
+        encodeAddi(6, 4, 0x0004),                     // addi r6, r4, 4
         encodeAddis(4, 0, static_cast<s16>(0x1234)),  // unrelated literal high
         encodeOri(4, 4, 0x5678),                      // unrelated literal low
         0x4E800020u,                                   // blr
@@ -701,6 +947,54 @@ bool testAnalyzerRegistersTextReferencedEntryStubs() {
 
     const auto& functions = analyzer.getCfg().getFunctions();
     return functions.find(0x80000004u) != functions.end();
+}
+
+bool testAnalyzerRegistersSplitTextReferencedCallbacks() {
+    TestBinary binary;
+    binary.setTextWords(0x80000000u, {
+        0x9421FFF0u,                                   // stwu r1, -16(r1)
+        encodeAddi(31, 0, 0),                         // li r31, 0
+        encodeAddis(4, 0, static_cast<s16>(0x8000)),  // lis r4, 0x8000
+        encodeAddi(3, 1, 0x0008),                     // unrelated scheduling gap
+        encodeAddi(6, 4, 0x0018),                     // addi r6, r4, 0x18
+        0x4E800020u,                                  // blr
+        encodeAddi(4, 4, 1),                          // callback entry at 0x80000018
+        0x4E800020u,                                  // blr
+    });
+    binary.setEntryPoint(0x8000000Cu);
+
+    Analyzer analyzer(binary);
+    analyzer.analyze(binary.getEntryPoint());
+
+    const auto& functions = analyzer.getCfg().getFunctions();
+    return functions.find(0x80000018u) != functions.end();
+}
+
+bool testAnalyzerRegistersLongGapTextReferencedCallbacks() {
+    TestBinary binary;
+    binary.setTextWords(0x80000000u, {
+        0x9421FFF0u,                                   // stwu r1, -16(r1)
+        encodeAddis(7, 0, static_cast<s16>(0x8000)),  // lis r7, 0x8000
+        encodeAddis(6, 0, static_cast<s16>(0x8000)),  // lis r6, 0x8000
+        encodeAddis(5, 0, static_cast<s16>(0x8000)),  // lis r5, 0x8000
+        encodeAddi(31, 0, 0),                         // unrelated setup
+        encodeAddi(3, 1, 8),                          // unrelated setup
+        encodeAddi(4, 1, 12),                         // unrelated setup
+        encodeAddi(0, 7, 0x0034),                     // unrelated callback pointer
+        encodeAddi(6, 6, 0x0038),                     // unrelated callback pointer
+        encodeAddi(5, 5, 0x0030),                     // callback entry at 0x80000030
+        0x60000000u,                                  // nop padding
+        0x4E800020u,                                  // blr before callback entry
+        encodeAddi(3, 3, 1),                          // callback entry at 0x80000030
+        0x4E800020u,                                  // blr
+        0x4E800020u,                                  // unrelated stub
+    });
+
+    Analyzer analyzer(binary);
+    analyzer.analyze(binary.getEntryPoint());
+
+    const auto& functions = analyzer.getCfg().getFunctions();
+    return functions.find(0x80000030u) != functions.end();
 }
 
 bool testAnalyzerPreservesOverlappingEntryFallthrough() {
@@ -767,6 +1061,28 @@ bool testAnalyzerKeepsInternalCallTargetsLocal() {
            emitted.find("case 0x80000018: goto label_0x80000018;") != std::string::npos;
 }
 
+bool testAnalyzerDoesNotInventNonExecutableLocalCallTargets() {
+    TestBinary binary;
+    binary.setTextWords(0x80000000u, {
+        0x48000063u, // bla 0x60
+        0x4E800020u, // blr
+    });
+
+    Analyzer analyzer(binary);
+    analyzer.analyze(binary.getEntryPoint());
+
+    const Function* function = analyzer.getCfg().getFunction(0x80000000u);
+    if (function == nullptr) {
+        return false;
+    }
+
+    Emitter emitter;
+    const std::string emitted = emitter.emitFunction(*function, analyzer.getCfg());
+    return emitted.find("goto label_0x60;") == std::string::npos &&
+           emitted.find("case 0x00000060: goto label_0x60;") == std::string::npos &&
+           emitted.find("call_by_addr(ctx, 0x00000060);") != std::string::npos;
+}
+
 } // namespace
 
 int main() {
@@ -784,13 +1100,21 @@ int main() {
         { "lifter_interrupt_return", testLifterInterruptReturn },
         { "lifter_record_cr0", testLifterRecordFormUpdatesCr0 },
         { "lifter_divwu", testLifterDivwu },
+        { "lifter_mulhwu", testLifterMulhwu },
+        { "lifter_mulhw", testLifterMulhw },
         { "lifter_divw", testLifterDivw },
         { "lifter_fcmp", testLifterFloatingCompare },
+        { "lifter_fpu_aform_operands", testLifterFloatingAFormOperands },
         { "emitter_helpers", testEmitterUsesNewHelpers },
         { "emitter_resume_pc", testEmitterResumesAtSavedPc },
         { "emitter_lr_returns", testEmitterTreatsLrBranchesAsReturns },
         { "emitter_no_fake_lr_resumes", testEmitterDoesNotInventLocalLrResumes },
+        { "emitter_ignores_missing_seed_blocks", testEmitterIgnoresMissingFunctionSeedBlocks },
+        { "emitter_sets_lr_for_external_calls", testEmitterSetsLrForExternalCalls },
+        { "emitter_preserves_lr_indirect_target", testEmitterPreservesLrIndirectCallTarget },
+        { "emitter_logs_unexpected_local_resume_targets", testEmitterLogsUnexpectedLocalResumeTargets },
         { "analyzer_local_jump_tables", testAnalyzerEmitsLocalJumpTablesAsSwitches },
+        { "lifter_clobbered_local_jump_table_index", testLifterPreservesClobberedLocalJumpTableIndex },
         { "optimizer_safety", testOptimizerKeepsStoreSourcesAndFprsSeparate },
         { "optimizer_load_clobbers", testOptimizerClearsConstantsAfterLoadClobbers },
         { "optimizer_rmw_dest_regs", testOptimizerPreservesReadModifyWriteDestRegisters },
@@ -799,8 +1123,11 @@ int main() {
         { "analyzer_direct_call_targets", testAnalyzerRegistersDirectCallTargets },
         { "analyzer_data_pointer_entries", testAnalyzerRegistersDataReferencedEntryStubs },
         { "analyzer_text_pointer_entries", testAnalyzerRegistersTextReferencedEntryStubs },
+        { "analyzer_text_pointer_split_callbacks", testAnalyzerRegistersSplitTextReferencedCallbacks },
+        { "analyzer_text_pointer_long_gap_callbacks", testAnalyzerRegistersLongGapTextReferencedCallbacks },
         { "analyzer_overlapping_entries", testAnalyzerPreservesOverlappingEntryFallthrough },
         { "analyzer_internal_call_targets", testAnalyzerKeepsInternalCallTargetsLocal },
+        { "analyzer_non_exec_call_targets", testAnalyzerDoesNotInventNonExecutableLocalCallTargets },
     };
 
     std::vector<std::string> failures;

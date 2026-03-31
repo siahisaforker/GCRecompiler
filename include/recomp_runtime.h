@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 #include <math.h>
@@ -298,6 +299,16 @@ static inline u32 PPC_DIVWU(CPUContext* ctx, u32 dividend, u32 divisor) {
         return 0;
     }
     return dividend / divisor;
+}
+
+static inline u32 PPC_MULHWU(CPUContext* ctx, u32 lhs, u32 rhs) {
+    (void)ctx;
+    return (u32)(((u64)lhs * (u64)rhs) >> 32);
+}
+
+static inline u32 PPC_MULHW(CPUContext* ctx, u32 lhs, u32 rhs) {
+    (void)ctx;
+    return (u32)(((s64)(s32)lhs * (s64)(s32)rhs) >> 32);
 }
 
 static inline u32 PPC_DIVW(CPUContext* ctx, u32 dividend, u32 divisor) {

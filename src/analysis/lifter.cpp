@@ -76,8 +76,15 @@ void emitBranchInstruction(const Instruction& instr, std::vector<IRInstruction>&
 IRBlock Lifter::liftBlock(const BasicBlock& block) {
     IRBlock irBlock;
     irBlock.startAddr = block.startAddr;
+    size_t instructionCount = block.instructions.size();
 
-    for (const auto& instr : block.instructions) {
+    if (block.localJumpTable &&
+        block.localJumpTable->patternStartInstructionIndex < instructionCount) {
+        instructionCount = block.localJumpTable->patternStartInstructionIndex;
+    }
+
+    for (size_t instrIndex = 0; instrIndex < instructionCount; ++instrIndex) {
+        const auto& instr = block.instructions[instrIndex];
         const size_t oldSize = irBlock.instructions.size();
         liftInstruction(instr, irBlock.instructions);
         for (size_t i = oldSize; i < irBlock.instructions.size(); ++i) {
@@ -85,20 +92,15 @@ IRBlock Lifter::liftBlock(const BasicBlock& block) {
         }
     }
 
-    if (block.localJumpTable && !irBlock.instructions.empty()) {
-        IRInstruction& tail = irBlock.instructions.back();
-        if (tail.op == IROp::BranchIndirect &&
-            !tail.operands.empty() &&
-            tail.operands[0].type == IROperandType::SpecialRegister &&
-            tail.operands[0].value == static_cast<u32>(IRSpecialRegister::CountRegister)) {
-            tail.op = IROp::BranchTable;
-            tail.operands.clear();
-            tail.operands.push_back(IROperand::Reg(block.localJumpTable->indexRegister));
-            tail.operands.push_back(IROperand::Addr(block.localJumpTable->defaultTarget));
-            for (u32 target : block.localJumpTable->targets) {
-                tail.operands.push_back(IROperand::Addr(target));
-            }
+    if (block.localJumpTable) {
+        IRInstruction tail(IROp::BranchTable);
+        tail.address = block.instructions.empty() ? block.startAddr : block.instructions.back().address;
+        tail.operands.push_back(IROperand::Reg(block.localJumpTable->indexRegister));
+        tail.operands.push_back(IROperand::Addr(block.localJumpTable->defaultTarget));
+        for (u32 target : block.localJumpTable->targets) {
+            tail.operands.push_back(IROperand::Addr(target));
         }
+        irBlock.instructions.push_back(std::move(tail));
     }
 
     return irBlock;
@@ -263,6 +265,8 @@ void Lifter::liftInstruction(const Instruction& instr, std::vector<IRInstruction
             switch (xop) {
                 case 0:   emitCompare(out, IROp::Cmp, decodeCrField(raw), IROperand::Reg(ra), IROperand::Reg(rb)); break;
                 case 4:   out.push_back({ IROp::Trap, { IROperand::Imm(rd), IROperand::Reg(ra), IROperand::Reg(rb) } }); break;
+                case 11:  out.push_back({ IROp::MulHighU, { IROperand::Reg(rd), IROperand::Reg(ra), IROperand::Reg(rb) } });
+                          maybeEmitRecordCompare(out, raw, rd); break;
                 case 19:  out.push_back({ IROp::Mfcr, { IROperand::Reg(rd) } }); break;
                 case 20:  out.push_back({ IROp::ReservationLoad, { IROperand::Reg(rd), gprOrZeroBase(ra), IROperand::Reg(rb) } }); break;
                 case 23:  out.push_back({ IROp::Load32, { IROperand::Reg(rd), gprOrZeroBase(ra), IROperand::Reg(rb) } }); break;
@@ -283,6 +287,8 @@ void Lifter::liftInstruction(const Instruction& instr, std::vector<IRInstruction
                 case 83:  out.push_back({ IROp::Mfmsr, { IROperand::Reg(rd) } }); break;
                 case 86:  out.push_back({ IROp::Sync, {} }); break; // dcbf
                 case 87:  out.push_back({ IROp::Load8, { IROperand::Reg(rd), gprOrZeroBase(ra), IROperand::Reg(rb) } }); break;
+                case 75:  out.push_back({ IROp::MulHighS, { IROperand::Reg(rd), IROperand::Reg(ra), IROperand::Reg(rb) } });
+                          maybeEmitRecordCompare(out, raw, rd); break;
                 case 104: out.push_back({ IROp::Sub, { IROperand::Reg(rd), IROperand::Imm(0), IROperand::Reg(ra) } });
                           maybeEmitRecordCompare(out, raw, rd); break; // neg
                 case 119: out.push_back({ IROp::Load8, { IROperand::Reg(rd), IROperand::Reg(ra), IROperand::Reg(rb) } });
@@ -473,9 +479,9 @@ void Lifter::liftInstruction(const Instruction& instr, std::vector<IRInstruction
                 case 18: out.push_back({ IROp::FDiv,  { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(rb) } }); break;
                 case 20: out.push_back({ IROp::FSub,  { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(rb) } }); break;
                 case 21: out.push_back({ IROp::FAdd,  { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(rb) } }); break;
-                case 25: out.push_back({ IROp::FMul,  { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(rb) } }); break;
-                case 28: out.push_back({ IROp::FMsub, { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(rb), IROperand::FReg(frc) } }); break;
-                case 29: out.push_back({ IROp::FMadd, { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(rb), IROperand::FReg(frc) } }); break;
+                case 25: out.push_back({ IROp::FMul,  { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(frc) } }); break;
+                case 28: out.push_back({ IROp::FMsub, { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(frc), IROperand::FReg(rb) } }); break;
+                case 29: out.push_back({ IROp::FMadd, { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(frc), IROperand::FReg(rb) } }); break;
                 default:
                     break;
             }
@@ -498,9 +504,9 @@ void Lifter::liftInstruction(const Instruction& instr, std::vector<IRInstruction
             if ((xop & 0x1F) == 18) { out.push_back({ IROp::FDiv, { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(rb) } }); break; }
             if ((xop & 0x1F) == 20) { out.push_back({ IROp::FSub, { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(rb) } }); break; }
             if ((xop & 0x1F) == 21) { out.push_back({ IROp::FAdd, { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(rb) } }); break; }
-            if ((xop & 0x1F) == 25) { out.push_back({ IROp::FMul, { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(rb) } }); break; }
-            if ((xop & 0x1F) == 28) { out.push_back({ IROp::FMsub, { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(rb), IROperand::FReg(frc) } }); break; }
-            if ((xop & 0x1F) == 29) { out.push_back({ IROp::FMadd, { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(rb), IROperand::FReg(frc) } }); break; }
+            if ((xop & 0x1F) == 25) { out.push_back({ IROp::FMul, { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(frc) } }); break; }
+            if ((xop & 0x1F) == 28) { out.push_back({ IROp::FMsub, { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(frc), IROperand::FReg(rb) } }); break; }
+            if ((xop & 0x1F) == 29) { out.push_back({ IROp::FMadd, { IROperand::FReg(rd), IROperand::FReg(ra), IROperand::FReg(frc), IROperand::FReg(rb) } }); break; }
 
             switch (xop) {
                 case 0:  out.push_back({ IROp::FCmpu, { IROperand::Imm(decodeCrField(raw)), IROperand::FReg(ra), IROperand::FReg(rb) } }); break;

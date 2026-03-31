@@ -23,6 +23,7 @@ struct BasicBlock {
     struct LocalJumpTable {
         u32 indexRegister = 0;
         u32 defaultTarget = 0;
+        size_t patternStartInstructionIndex = 0;
         std::vector<u32> targets;
     };
 

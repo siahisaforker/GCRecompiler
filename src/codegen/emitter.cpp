@@ -33,7 +33,7 @@ std::string Emitter::emitFunction(const Function& func, const ControlFlowGraph& 
     ss << "// Function: " << func.name << "\n";
     ss << "void fn_0x" << std::hex << std::setw(8) << std::setfill('0') << func.startAddr << "(CPUContext* ctx) {\n";
 
-    std::set<u32> emittedBlocks = func.blocks;
+    std::set<u32> emittedBlocks;
     std::set<u32> pendingBlocks;
     std::set<u32> localResumeTargets;
 
@@ -46,7 +46,13 @@ std::string Emitter::emitFunction(const Function& func, const ControlFlowGraph& 
 
     for (u32 blockAddr : func.blocks) {
         const BasicBlock* block = cfg.getBlock(blockAddr);
-        if (!block || !block->localJumpTable) {
+        if (!block) {
+            continue;
+        }
+
+        emittedBlocks.insert(blockAddr);
+
+        if (!block->localJumpTable) {
             continue;
         }
 
@@ -189,6 +195,8 @@ std::string Emitter::emitInstruction(const IRInstruction& instr,
         case IROp::Add:    return destGpr(0) + " = " + gpr(1) + " + " + gpr(2) + ";";
         case IROp::Sub:    return destGpr(0) + " = " + gpr(1) + " - " + gpr(2) + ";";
         case IROp::Mul:    return destGpr(0) + " = " + gpr(1) + " * " + gpr(2) + ";";
+        case IROp::MulHighS:return destGpr(0) + " = PPC_MULHW(ctx, " + gpr(1) + ", " + gpr(2) + ");";
+        case IROp::MulHighU:return destGpr(0) + " = PPC_MULHWU(ctx, " + gpr(1) + ", " + gpr(2) + ");";
         case IROp::DivS:   return destGpr(0) + " = PPC_DIVW(ctx, " + gpr(1) + ", " + gpr(2) + ");";
         case IROp::DivU:   return destGpr(0) + " = PPC_DIVWU(ctx, " + gpr(1) + ", " + gpr(2) + ");";
         case IROp::And:    return destGpr(0) + " = " + gpr(1) + " & " + gpr(2) + ";";
@@ -319,10 +327,16 @@ std::string Emitter::emitInstruction(const IRInstruction& instr,
                 return "ctx->lr = " + formatHex(instr.address + 4) + "; goto label_0x" +
                        formatImmediate(instr.operands[0].value).substr(2) + ";";
             }
-            return "call_by_addr(ctx, " + formatHex(instr.operands[0].value) + ");";
+            return "ctx->lr = " + formatHex(instr.address + 4) + "; call_by_addr(ctx, " +
+                   formatHex(instr.operands[0].value) + ");";
 
         case IROp::CallIndirect:
-            return "call_by_addr(ctx, " + branchTarget(instr.operands[0]) + ");";
+            if (isLinkRegisterTarget(instr.operands[0])) {
+                return "do { const uint32_t call_target = ctx->lr; ctx->lr = " +
+                       formatHex(instr.address + 4) + "; call_by_addr(ctx, call_target); } while (0);";
+            }
+            return "ctx->lr = " + formatHex(instr.address + 4) + "; call_by_addr(ctx, " +
+                   branchTarget(instr.operands[0]) + ");";
 
         case IROp::Return:
             return emitLocalResumeOrReturn("ctx->lr");

@@ -94,6 +94,11 @@ bool decodeCmplwi(u32 raw, u32& ra, u16& imm) {
     return true;
 }
 
+bool isControlFlowBoundary(u32 raw) {
+    const u32 op = raw >> 26;
+    return op == 16 || op == 18 || op == 19;
+}
+
 bool isStackFramePrologue(u32 raw) {
     return (raw >> 16) == 0x9421;
 }
@@ -193,9 +198,10 @@ bool looksLikeDataReferencedEntry(const Binary& binary, Disassembler& disasm, u3
 }
 
 bool decodeAbsoluteAddressLoad(const Binary& binary, u32 addr, u32& target) {
+    constexpr u32 kMaxAddressMaterializationScanBytes = 0x40;
+
     u32 lisRaw = 0;
-    u32 loRaw = 0;
-    if (!binary.read32(addr, lisRaw) || !binary.read32(addr + 4, loRaw)) {
+    if (!binary.read32(addr, lisRaw)) {
         return false;
     }
 
@@ -205,21 +211,45 @@ bool decodeAbsoluteAddressLoad(const Binary& binary, u32 addr, u32& target) {
         return false;
     }
 
-    u32 loRt = 0;
-    u32 loRa = 0;
-    s16 loAddi = 0;
-    if (decodeAddi(loRaw, loRt, loRa, loAddi) && loRt == reg && loRa == reg) {
-        target = (static_cast<u32>(static_cast<u16>(hi)) << 16) +
-            static_cast<u32>(static_cast<s32>(loAddi));
-        return true;
-    }
+    // PPC callback setup often batches several `lis` instructions first and only
+    // resolves each low half later in the same basic block.
+    for (u32 offset = 4; offset <= kMaxAddressMaterializationScanBytes; offset += 4) {
+        u32 loRaw = 0;
+        if (!binary.read32(addr + offset, loRaw)) {
+            break;
+        }
+        if (isControlFlowBoundary(loRaw)) {
+            break;
+        }
 
-    u32 loOriRa = 0;
-    u32 loOriRs = 0;
-    u16 loOri = 0;
-    if (decodeOri(loRaw, loOriRa, loOriRs, loOri) && loOriRa == reg && loOriRs == reg) {
-        target = (static_cast<u32>(static_cast<u16>(hi)) << 16) | static_cast<u32>(loOri);
-        return true;
+        u32 nextRt = 0;
+        s16 nextHi = 0;
+        if (decodeLis(loRaw, nextRt, nextHi) && nextRt == reg) {
+            break;
+        }
+
+        u32 loRt = 0;
+        u32 loRa = 0;
+        s16 loAddi = 0;
+        if (decodeAddi(loRaw, loRt, loRa, loAddi) && loRa == reg) {
+            target = (static_cast<u32>(static_cast<u16>(hi)) << 16) +
+                static_cast<u32>(static_cast<s32>(loAddi));
+            return true;
+        }
+        if (decodeAddi(loRaw, loRt, loRa, loAddi) && loRt == reg) {
+            break;
+        }
+
+        u32 loOriRa = 0;
+        u32 loOriRs = 0;
+        u16 loOri = 0;
+        if (decodeOri(loRaw, loOriRa, loOriRs, loOri) && loOriRs == reg) {
+            target = (static_cast<u32>(static_cast<u16>(hi)) << 16) | static_cast<u32>(loOri);
+            return true;
+        }
+        if (decodeOri(loRaw, loOriRa, loOriRs, loOri) && loOriRa == reg && loOriRs != reg) {
+            break;
+        }
     }
 
     return false;
@@ -367,6 +397,7 @@ std::optional<BasicBlock::LocalJumpTable> detectLocalJumpTable(
     BasicBlock::LocalJumpTable jumpTable;
     jumpTable.indexRegister = indexReg;
     jumpTable.defaultTarget = defaultTarget;
+    jumpTable.patternStartInstructionIndex = count - 4;
 
     for (u32 i = 0; i <= maxIndex; ++i) {
         u32 target = 0;
@@ -637,6 +668,11 @@ void Analyzer::analyzeBlock(u32 startAddr, Function& currentFunc, std::set<u32>&
     m_visitedBlocks.insert(currentAddr);
 
     if (instr.isBranch) {
+      const bool hasExecutableDirectTarget =
+          instr.branchTarget != 0 &&
+          instr.branchRegisterTarget == BranchRegisterTarget::None &&
+          m_binary.isExecutable(instr.branchTarget);
+
       if (instr.type == InstructionType::Return) {
         block.type = BlockType::Return;
       } else if (instr.type == InstructionType::Call) {
@@ -647,8 +683,7 @@ void Analyzer::analyzeBlock(u32 startAddr, Function& currentFunc, std::set<u32>&
             pendingBlocks.insert(next);
         }
 
-        if (instr.branchTarget != 0 &&
-            instr.branchRegisterTarget == BranchRegisterTarget::None) {
+        if (hasExecutableDirectTarget) {
           if (looksLikeIndependentFunctionEntry(m_binary, m_disasm, instr.branchTarget)) {
               std::stringstream ss;
               ss << std::hex << std::setw(8) << std::setfill('0') << instr.branchTarget;
@@ -661,16 +696,14 @@ void Analyzer::analyzeBlock(u32 startAddr, Function& currentFunc, std::set<u32>&
           }
         }
       } else if (instr.type == InstructionType::Branch) {
-        if (instr.branchTarget != 0 &&
-            instr.branchRegisterTarget == BranchRegisterTarget::None) {
+        if (hasExecutableDirectTarget) {
           block.successors.insert(instr.branchTarget);
           if (currentFunc.blocks.insert(instr.branchTarget).second) {
               pendingBlocks.insert(instr.branchTarget);
           }
         }
       } else if (instr.type == InstructionType::ConditionalBranch) {
-        if (instr.branchTarget != 0 &&
-            instr.branchRegisterTarget == BranchRegisterTarget::None) {
+        if (hasExecutableDirectTarget) {
           block.successors.insert(instr.branchTarget);
           if (currentFunc.blocks.insert(instr.branchTarget).second) {
               pendingBlocks.insert(instr.branchTarget);
@@ -765,6 +798,7 @@ void Analyzer::emitAllFunctions(const std::string& outputDir) {
         runtimeHeader << "#undef ram\n\n";
         runtimeHeader << "#define MEM_MASK GC_RAM_MASK\n\n";
         runtimeHeader << "extern void call_by_addr(CPUContext* ctx, u32 addr);\n\n";
+        runtimeHeader << "void runtime_tracef(const char* fmt, ...);\n\n";
         runtimeHeader << "static inline void fn_indirect(CPUContext* ctx, u32 addr) {\n";
         runtimeHeader << "    call_by_addr(ctx, addr);\n";
         runtimeHeader << "}\n\n";
@@ -850,8 +884,7 @@ void Analyzer::emitAllFunctions(const std::string& outputDir) {
         jt << "        g_trace_limit = 256;\n";
         jt << "    }\n\n";
         jt << "    g_trace_enabled = 1;\n";
-        jt << "    printf(\"[TRACE] Enabled call trace for %u calls.\\n\", g_trace_limit);\n";
-        jt << "    fflush(stdout);\n";
+        jt << "    fprintf(stderr, \"[TRACE] Enabled call trace for %u calls.\\n\", g_trace_limit);\n";
         jt << "}\n\n";
         jt << "static uint32_t normalize_dispatch_addr(uint32_t addr) {\n";
         jt << "    if (addr < 0x01800000u) {\n";
@@ -890,8 +923,7 @@ void Analyzer::emitAllFunctions(const std::string& outputDir) {
         jt << "    addr = normalize_dispatch_addr(addr);\n";
         jt << "    init_call_trace();\n";
         jt << "    if (g_trace_enabled && g_trace_count < g_trace_limit) {\n";
-        jt << "        printf(\"[TRACE] #%u depth=%u addr=0x%08X lr=0x%08X ctr=0x%08X pc=0x%08X\\n\", g_trace_count, g_trace_depth, addr, ctx->lr, ctx->ctr, ctx->pc);\n";
-        jt << "        fflush(stdout);\n";
+        jt << "        fprintf(stderr, \"[TRACE] #%u depth=%u addr=0x%08X lr=0x%08X ctr=0x%08X pc=0x%08X\\n\", g_trace_count, g_trace_depth, addr, ctx->lr, ctx->ctr, ctx->pc);\n";
         jt << "    }\n";
         jt << "    g_trace_count++;\n";
         jt << "    g_trace_depth++;\n";
@@ -903,7 +935,7 @@ void Analyzer::emitAllFunctions(const std::string& outputDir) {
         jt << "    }\n";
         jt << "    functionAddr = resolve_dispatch_function(addr);\n";
         jt << "    if (functionAddr == 0) {\n";
-        jt << "        printf(\"[RUNTIME] Unknown function call: 0x%08X (lr=0x%08X ctr=0x%08X pc=0x%08X)\\n\", addr, ctx->lr, ctx->ctr, ctx->pc);\n";
+        jt << "        fprintf(stderr, \"[RUNTIME] Unknown function call: 0x%08X (lr=0x%08X ctr=0x%08X pc=0x%08X)\\n\", addr, ctx->lr, ctx->ctr, ctx->pc);\n";
         jt << "        if (g_trace_depth > 0) {\n";
         jt << "            g_trace_depth--;\n";
         jt << "        }\n";
@@ -914,7 +946,7 @@ void Analyzer::emitAllFunctions(const std::string& outputDir) {
         for (const auto& [addr, func] : m_cfg.getFunctions()) {
             jt << "        case 0x" << std::hex << addr << ": fn_0x" << std::hex << std::setw(8) << std::setfill('0') << addr << "(ctx); break;\n";
         }
-        jt << "        default: printf(\"[RUNTIME] Missing function entry for 0x%08X (resolved from 0x%08X, lr=0x%08X ctr=0x%08X pc=0x%08X)\\n\", functionAddr, addr, ctx->lr, ctx->ctr, ctx->pc); break;\n";
+        jt << "        default: fprintf(stderr, \"[RUNTIME] Missing function entry for 0x%08X (resolved from 0x%08X, lr=0x%08X ctr=0x%08X pc=0x%08X)\\n\", functionAddr, addr, ctx->lr, ctx->ctr, ctx->pc); break;\n";
         jt << "    }\n";
         jt << "    if (g_trace_depth > 0) {\n";
         jt << "        g_trace_depth--;\n";
@@ -922,19 +954,23 @@ void Analyzer::emitAllFunctions(const std::string& outputDir) {
         jt << "}\n";
     }
 
-    std::ofstream stubs(outputDir + "/hle_stubs.c");
-    if (stubs.is_open()) {
-        stubs << "#include \"recomp_runtime.h\"\n\n";
-        stubs << "#include \"functions.h\"\n\n";
-        stubs << "/*\n";
-        stubs << " * Placeholder for manual runtime hooks.\n";
-        stubs << " * Return 1 after handling an address to bypass the generated dispatch table.\n";
-        stubs << " */\n";
-        stubs << "int try_hle_stub(CPUContext* ctx, u32 addr) {\n";
-        stubs << "    (void)ctx;\n";
-        stubs << "    (void)addr;\n";
-        stubs << "    return 0;\n";
-        stubs << "}\n";
+    const std::string stubsPath = outputDir + "/hle_stubs.c";
+    std::ifstream existingStubs(stubsPath);
+    if (!existingStubs.good()) {
+        std::ofstream stubs(stubsPath);
+        if (stubs.is_open()) {
+            stubs << "#include \"recomp_runtime.h\"\n\n";
+            stubs << "#include \"functions.h\"\n\n";
+            stubs << "/*\n";
+            stubs << " * Placeholder for manual runtime hooks.\n";
+            stubs << " * Return 1 after handling an address to bypass the generated dispatch table.\n";
+            stubs << " */\n";
+            stubs << "int try_hle_stub(CPUContext* ctx, u32 addr) {\n";
+            stubs << "    (void)ctx;\n";
+            stubs << "    (void)addr;\n";
+            stubs << "    return 0;\n";
+            stubs << "}\n";
+        }
     }
 }
 
